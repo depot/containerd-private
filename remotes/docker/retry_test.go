@@ -20,6 +20,8 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -92,10 +94,35 @@ func TestRetryDelayPastHTTPDateFallsBack(t *testing.T) {
 	}
 }
 
-func TestWaitRetryCanceled(t *testing.T) {
+func TestDoWithRetriesCanceledDuringBackoff(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := waitRetry(ctx, time.Hour); err != context.Canceled {
-		t.Fatalf("waitRetry() error = %v; want %v", err, context.Canceled)
+	req := &request{
+		method: http.MethodGet,
+		host: RegistryHost{
+			Client: server.Client(),
+			Host:   u.Host,
+			Scheme: u.Scheme,
+		},
+		retryNotify: func(context.Context, string, int, int, time.Duration) {
+			cancel()
+		},
+	}
+
+	resp, err := req.doWithRetries(ctx, nil)
+	if resp != nil {
+		resp.Body.Close()
+		t.Fatal("doWithRetries() returned a response; want nil")
+	}
+	if err != context.Canceled {
+		t.Fatalf("doWithRetries() error = %v; want %v", err, context.Canceled)
 	}
 }
