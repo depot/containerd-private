@@ -367,6 +367,16 @@ func (pw *pushWriter) setPipe(p *io.PipeWriter) {
 func (pw *pushWriter) setError(err error) {
 	pw.errC <- err
 }
+
+func (pw *pushWriter) closedPipeError() error {
+	select {
+	case err := <-pw.errC:
+		return err
+	default:
+		return io.ErrClosedPipe
+	}
+}
+
 func (pw *pushWriter) setResponse(resp *http.Response) {
 	pw.respC <- resp
 }
@@ -380,14 +390,14 @@ func (pw *pushWriter) Write(p []byte) (n int, err error) {
 	if pw.pipe == nil {
 		p, ok := <-pw.pipeC
 		if !ok {
-			return 0, io.ErrClosedPipe
+			return 0, pw.closedPipeError()
 		}
 		pw.pipe = p
 	} else {
 		select {
 		case p, ok := <-pw.pipeC:
 			if !ok {
-				return 0, io.ErrClosedPipe
+				return 0, pw.closedPipeError()
 			}
 			pw.pipe.CloseWithError(content.ErrReset)
 			pw.pipe = p
@@ -404,13 +414,7 @@ func (pw *pushWriter) Write(p []byte) (n int, err error) {
 
 	n, err = pw.pipe.Write(p)
 	if errors.Is(err, io.ErrClosedPipe) {
-		// if the pipe is closed, we might have the original error on the error
-		// channel - so we should try and get it
-		select {
-		case err2 := <-pw.errC:
-			err = err2
-		default:
-		}
+		err = pw.closedPipeError()
 	}
 	status.Offset += int64(n)
 	status.UpdatedAt = time.Now()
@@ -471,7 +475,7 @@ func (pw *pushWriter) Commit(ctx context.Context, size int64, expected digest.Di
 		// can complete successfully, but the pipe may have changed. In that case, the
 		// content needs to be reset.
 		if !ok {
-			return io.ErrClosedPipe
+			return pw.closedPipeError()
 		}
 		pw.pipe.CloseWithError(content.ErrReset)
 		pw.pipe = p

@@ -67,6 +67,21 @@ func TestGetManifestPath(t *testing.T) {
 	}
 }
 
+func TestPushWriterReturnsTerminalErrorWhenPipeCloses(t *testing.T) {
+	tracker := NewInMemoryTracker()
+	tracker.SetStatus("test", Status{})
+	pw := newPushWriter(nil, "test", "", tracker, false)
+
+	terminalErr := errors.New("registry request failed")
+	pw.setError(terminalErr)
+	close(pw.pipeC)
+
+	_, err := pw.Write([]byte("content"))
+	if !errors.Is(err, terminalErr) {
+		t.Fatalf("Write() error = %v; want %v", err, terminalErr)
+	}
+}
+
 // TestPusherErrClosedRetry tests if retrying work when error occurred on close.
 func TestPusherErrClosedRetry(t *testing.T) {
 	ctx := context.Background()
