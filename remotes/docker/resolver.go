@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
@@ -98,6 +99,9 @@ type ResolverOptions struct {
 	// mechanism for getting blob upload status is expensive.
 	Tracker StatusTracker
 
+	// RetryNotify is called before retrying a rate-limited registry request.
+	RetryNotify func(context.Context, string, int, int, time.Duration)
+
 	// Authorizer is used to authorize registry requests
 	//
 	// Deprecated: use Hosts.
@@ -139,6 +143,7 @@ type dockerResolver struct {
 	header        http.Header
 	resolveHeader http.Header
 	tracker       StatusTracker
+	retryNotify   func(context.Context, string, int, int, time.Duration)
 }
 
 // NewResolver returns a new resolver to a Docker registry
@@ -200,6 +205,7 @@ func NewResolver(options ResolverOptions) remotes.Resolver {
 		header:        options.Headers,
 		resolveHeader: resolveHeader,
 		tracker:       options.Tracker,
+		retryNotify:   options.RetryNotify,
 	}
 }
 
@@ -446,10 +452,11 @@ func (r *dockerResolver) resolveDockerBase(ref string) (*dockerBase, error) {
 }
 
 type dockerBase struct {
-	refspec    reference.Spec
-	repository string
-	hosts      []RegistryHost
-	header     http.Header
+	refspec     reference.Spec
+	repository  string
+	hosts       []RegistryHost
+	header      http.Header
+	retryNotify func(context.Context, string, int, int, time.Duration)
 }
 
 func (r *dockerResolver) base(refspec reference.Spec) (*dockerBase, error) {
@@ -459,10 +466,11 @@ func (r *dockerResolver) base(refspec reference.Spec) (*dockerBase, error) {
 		return nil, err
 	}
 	return &dockerBase{
-		refspec:    refspec,
-		repository: strings.TrimPrefix(refspec.Locator, host+"/"),
-		hosts:      hosts,
-		header:     r.header,
+		refspec:     refspec,
+		repository:  strings.TrimPrefix(refspec.Locator, host+"/"),
+		hosts:       hosts,
+		header:      r.header,
+		retryNotify: r.retryNotify,
 	}, nil
 }
 
@@ -491,10 +499,11 @@ func (r *dockerBase) request(host RegistryHost, method string, ps ...string) *re
 		p = p + "/"
 	}
 	return &request{
-		method: method,
-		path:   p,
-		header: header,
-		host:   host,
+		method:      method,
+		path:        p,
+		header:      header,
+		host:        host,
+		retryNotify: r.retryNotify,
 	}
 }
 
@@ -533,12 +542,13 @@ func (r *request) addNamespace(ns string) (err error) {
 }
 
 type request struct {
-	method string
-	path   string
-	header http.Header
-	host   RegistryHost
-	body   func() (io.ReadCloser, error)
-	size   int64
+	method      string
+	path        string
+	header      http.Header
+	host        RegistryHost
+	body        func() (io.ReadCloser, error)
+	size        int64
+	retryNotify func(context.Context, string, int, int, time.Duration)
 }
 
 func (r *request) do(ctx context.Context) (*http.Response, error) {
@@ -610,6 +620,23 @@ func (r *request) doWithRetries(ctx context.Context, responses []*http.Response)
 	}
 	if retry {
 		resp.Body.Close()
+		if delay := retryDelay(resp, len(responses)); delay > 0 {
+			log.G(ctx).WithFields(log.Fields{
+				"host":        r.host.Host,
+				"status":      resp.StatusCode,
+				"attempt":     len(responses),
+				"delay":       delay,
+				"retry-after": resp.Header.Get("Retry-After"),
+			}).Warn("registry rate limited, backing off before retry")
+			if r.retryNotify != nil {
+				r.retryNotify(ctx, r.host.Host, resp.StatusCode, len(responses), delay)
+			}
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		return r.doWithRetries(ctx, responses)
 	}
 	return resp, err
