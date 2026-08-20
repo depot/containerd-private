@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -191,6 +192,7 @@ func TestDockerFetcherOpen(t *testing.T) {
 			}
 
 			req := f.request(host, http.MethodGet)
+			req.retryWait = func(context.Context, time.Duration) error { return nil }
 
 			got, err := f.open(context.TODO(), req, "", 0)
 			assert.Equal(t, tt.wantErr, err != nil)

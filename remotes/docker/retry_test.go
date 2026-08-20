@@ -17,6 +17,7 @@
 package docker
 
 import (
+	"context"
 	"math"
 	"net/http"
 	"testing"
@@ -68,7 +69,7 @@ func TestRetryDelay(t *testing.T) {
 		{name: "zero falls back", status: http.StatusTooManyRequests, retryAfter: "0", attempt: 1, min: 750 * time.Millisecond, max: 1250 * time.Millisecond},
 		{name: "invalid falls back", status: http.StatusTooManyRequests, retryAfter: "soon", attempt: 2, min: 1500 * time.Millisecond, max: 2500 * time.Millisecond},
 		{name: "low attempt clamps", status: http.StatusTooManyRequests, attempt: 0, min: 750 * time.Millisecond, max: 1250 * time.Millisecond},
-		{name: "high attempt clamps", status: http.StatusTooManyRequests, attempt: 63, min: 12 * time.Second, max: maxRetryDelay},
+		{name: "high attempt clamps", status: http.StatusTooManyRequests, attempt: 63, min: 11250 * time.Millisecond, max: maxRetryDelay},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := &http.Response{StatusCode: tc.status, Header: make(http.Header)}
@@ -88,5 +89,13 @@ func TestRetryDelayPastHTTPDateFallsBack(t *testing.T) {
 	resp.Header.Set("Retry-After", time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat))
 	if got := retryDelay(resp, 1); got < 750*time.Millisecond || got > 1250*time.Millisecond {
 		t.Fatalf("retryDelay with past HTTP date = %v; want [750ms, 1.25s]", got)
+	}
+}
+
+func TestWaitRetryCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitRetry(ctx, time.Hour); err != context.Canceled {
+		t.Fatalf("waitRetry() error = %v; want %v", err, context.Canceled)
 	}
 }

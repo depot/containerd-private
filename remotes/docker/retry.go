@@ -17,6 +17,7 @@
 package docker
 
 import (
+	"context"
 	"math"
 	"net/http"
 	"strconv"
@@ -26,6 +27,17 @@ import (
 )
 
 const maxRetryDelay = 15 * time.Second
+
+func waitRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // retryDelay returns a positive delay only for rate-limited requests.
 // Retry-After takes precedence over jittered exponential backoff.

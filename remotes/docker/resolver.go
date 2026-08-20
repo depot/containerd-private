@@ -549,6 +549,7 @@ type request struct {
 	body        func() (io.ReadCloser, error)
 	size        int64
 	retryNotify func(context.Context, string, int, int, time.Duration)
+	retryWait   func(context.Context, time.Duration) error
 }
 
 func (r *request) do(ctx context.Context) (*http.Response, error) {
@@ -631,10 +632,12 @@ func (r *request) doWithRetries(ctx context.Context, responses []*http.Response)
 			if r.retryNotify != nil {
 				r.retryNotify(ctx, r.host.Host, resp.StatusCode, len(responses), delay)
 			}
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			wait := r.retryWait
+			if wait == nil {
+				wait = waitRetry
+			}
+			if err := wait(ctx, delay); err != nil {
+				return nil, err
 			}
 		}
 		return r.doWithRetries(ctx, responses)
