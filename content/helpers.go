@@ -31,9 +31,9 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
-// maxResets is the no.of times the Copy() method can tolerate a reset of the body.
-// Keep this above the docker resolver's five request retries so Copy can observe
-// the terminal request error after the last body reset.
+// maxResets is the number of body resets Copy tolerates.
+// Keep it above the resolver's retry bound so the final request error can reach
+// the caller.
 const maxResets = 10
 
 var ErrReset = errors.New("writer has been reset")
